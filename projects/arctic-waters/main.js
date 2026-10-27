@@ -95,6 +95,8 @@ async function loadSkyImage(url, name = url) {
   const loader = ext === "hdr" ? new HDRLoader() : ext === "exr" ? new EXRLoader() : new THREE.TextureLoader();
   if (loader.setDataType) loader.setDataType(THREE.FloatType); // so the pixels can be analysed
   const texture = await loader.loadAsync(url);
+  // "sky@5x.jpg": an 8-bit image stored 5x darker so bright clouds don't clip.
+  skyGain = Number(name.match(/@([\d.]+)x\./)?.[1] ?? 1);
   skyInfo = analyseSky(texture);
   texture.mapping = THREE.EquirectangularReflectionMapping;
   if (loader instanceof THREE.TextureLoader) texture.colorSpace = THREE.SRGBColorSpace;
@@ -115,6 +117,7 @@ async function loadSkyImage(url, name = url) {
  * in an equirectangular image, so the water glint and the mist can match it.
  */
 let skyInfo = null;
+let skyGain = 1;
 function analyseSky(texture) {
   let w, h, read;
   if (texture.image?.data) {
@@ -167,7 +170,7 @@ function alignToSkyImage() {
   const dir = skyInfo.sun.clone().applyEuler(scene.backgroundRotation);
   water.material.uniforms.sunDirection.value.copy(dir);
   moonLight.position.copy(dir).multiplyScalar(100);
-  scene.fog.color.copy(skyInfo.horizon).multiplyScalar(settings.skyBrightness);
+  scene.fog.color.copy(skyInfo.horizon).multiplyScalar(settings.skyBrightness * skyGain);
 }
 
 function useGeneratedSky() {
@@ -186,8 +189,9 @@ function applySkyTransform() {
   const r = THREE.MathUtils.degToRad(settings.skyRotation);
   scene.backgroundRotation.set(0, r, 0);
   scene.environmentRotation.set(0, r, 0);
-  scene.backgroundIntensity = settings.skyBrightness;
-  scene.environmentIntensity = skyImage ? settings.skyBrightness * 0.8 : 0.9;
+  const gain = skyImage ? skyGain : 1;
+  scene.backgroundIntensity = settings.skyBrightness * gain;
+  scene.environmentIntensity = skyImage ? settings.skyBrightness * gain * 0.8 : 0.9;
   alignToSkyImage();
 }
 
@@ -490,9 +494,9 @@ camera.position.copy(boatPos).add(boatToWorld(VIEWS.Horizon));
 controls.target.copy(boatPos).add(new THREE.Vector3(0, 1.4, 0));
 document.querySelector('#view-buttons button[data-view="Horizon"]').setAttribute("aria-pressed", "true");
 
-// A sky image placed next to this file (sky.hdr, sky.exr, sky.jpg, ...) is used
-// automatically; otherwise the clouds are generated.
-const bundledSky = Object.entries(import.meta.glob("./sky.{hdr,exr,jpg,jpeg,png,webp}", { query: "?url", import: "default", eager: true }));
+// A sky image placed next to this file (sky.hdr, sky.exr, sky.jpg, sky@5x.jpg, ...)
+// is used automatically; otherwise the clouds are generated.
+const bundledSky = Object.entries(import.meta.glob("./sky{,@*}.{hdr,exr,jpg,jpeg,png,webp}", { query: "?url", import: "default", eager: true }));
 if (bundledSky.length) {
   scene.background = new THREE.Color(0x8f98a3); // until the image arrives
   loadSkyImage(bundledSky[0][1], bundledSky[0][0]).catch((err) => {
