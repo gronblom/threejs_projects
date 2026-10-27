@@ -33,3 +33,8 @@ Open the address it prints (http://localhost:5173). Edits reload instantly.
 
 Every push to `main` builds the site and publishes it to GitHub Pages
 (`.github/workflows/pages.yml`). One-time setup: **Settings → Pages → Source: GitHub Actions**.
+
+## Credits
+
+- Arctic Waters sky: "Aristea Wreck Pure Sky" from [Poly Haven](https://polyhaven.com) (CC0), converted to `.hdr`.
+- Water normal map: `waternormals.jpg` from the [three.js examples](https://github.com/mrdoob/three.js) (MIT).

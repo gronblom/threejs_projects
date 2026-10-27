@@ -1,10 +1,15 @@
-// Arctic Waters: a lone boat on a mirror-calm sea under a moonlit storm.
+// Arctic Waters: a lone boat on a mirror-calm sea under a heavy sky.
 // Recreation of a scene shared on r/threejs ("Arctic waters in three.js").
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { Water } from "three/addons/objects/Water.js";
 import { HDRLoader } from "three/addons/loaders/HDRLoader.js";
 import { EXRLoader } from "three/addons/loaders/EXRLoader.js";
+import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
+import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
+import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
+import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
+import waterNormalsUrl from "./waternormals.jpg";
 import { StormSky } from "./sky.js";
 import { createBoat } from "./boat.js";
 
@@ -41,7 +46,10 @@ const settings = {
   cruise: true,
   seed: 3,
   skyRotation: 0,
-  skyBrightness: 1,
+  skyBrightness: 0.45,
+  saturation: 0.2,
+  contrast: 1.3,
+  coolness: 0.35,
 };
 
 // --- Sky -------------------------------------------------------------------------
@@ -68,7 +76,7 @@ function renderSky() {
   water.material.uniforms.sunDirection.value.copy(dir);
   moonLight.position.copy(dir).multiplyScalar(100);
   scene.fog.density = 0.0035 * settings.mist;
-  if (skyImage) return;
+  if (skyImage) return alignToSkyImage();
   sky.uniforms.uCoverage.value = settings.coverage;
   sky.uniforms.uMoonDir.value.copy(dir);
   sky.uniforms.uMist.value = settings.mist;
@@ -85,7 +93,9 @@ function renderSky() {
 async function loadSkyImage(url, name = url) {
   const ext = name.split(".").pop().toLowerCase().split("?")[0];
   const loader = ext === "hdr" ? new HDRLoader() : ext === "exr" ? new EXRLoader() : new THREE.TextureLoader();
+  if (loader.setDataType) loader.setDataType(THREE.FloatType); // so the pixels can be analysed
   const texture = await loader.loadAsync(url);
+  skyInfo = analyseSky(texture);
   texture.mapping = THREE.EquirectangularReflectionMapping;
   if (loader instanceof THREE.TextureLoader) texture.colorSpace = THREE.SRGBColorSpace;
   skyImage?.dispose();
@@ -97,12 +107,75 @@ async function loadSkyImage(url, name = url) {
   applySkyTransform();
   document.getElementById("sky-source").textContent = name.split("/").pop();
   document.getElementById("generated-sky").hidden = false;
+  document.getElementById("generated-controls").hidden = true;
+}
+
+/**
+ * Finds the sun (brightest pixel) and the average colour just above the horizon
+ * in an equirectangular image, so the water glint and the mist can match it.
+ */
+let skyInfo = null;
+function analyseSky(texture) {
+  let w, h, read;
+  if (texture.image?.data) {
+    ({ width: w, height: h } = texture.image);
+    const d = texture.image.data;
+    const ch = d.length / (w * h);
+    read = (x, y) => [d[(y * w + x) * ch], d[(y * w + x) * ch + 1], d[(y * w + x) * ch + 2]];
+  } else {
+    // 8-bit image: sample a reduced copy through a canvas.
+    w = 512;
+    h = 256;
+    const ctx = Object.assign(document.createElement("canvas"), { width: w, height: h }).getContext("2d", { willReadFrequently: true });
+    ctx.drawImage(texture.image, 0, 0, w, h);
+    const d = ctx.getImageData(0, 0, w, h).data;
+    const lin = (v) => (v / 255) ** 2.2;
+    read = (x, y) => [lin(d[(y * w + x) * 4]), lin(d[(y * w + x) * 4 + 1]), lin(d[(y * w + x) * 4 + 2])];
+  }
+  // Row 0 is the top of the sky unless the texture is stored bottom-up.
+  const topDown = texture.flipY !== false || !texture.image?.data;
+  const rowToV = (y) => (topDown ? 1 - (y + 0.5) / h : (y + 0.5) / h);
+
+  let best = -1, bx = 0, by = 0;
+  const horizon = new THREE.Color(0, 0, 0);
+  let n = 0;
+  for (let y = 0; y < h; y += 2) {
+    const v = rowToV(y);
+    for (let x = 0; x < w; x += 2) {
+      const [r, g, b] = read(x, y);
+      const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      if (v > 0.5 && lum > best) [best, bx, by] = [lum, x, y];
+      if (v > 0.5 && v < 0.53) {
+        horizon.r += r;
+        horizon.g += g;
+        horizon.b += b;
+        n++;
+      }
+    }
+  }
+  horizon.multiplyScalar(1 / Math.max(n, 1));
+  // Same mapping three.js uses to sample equirectangular maps.
+  const phi = ((bx + 0.5) / w - 0.5) * Math.PI * 2;
+  const theta = (rowToV(by) - 0.5) * Math.PI;
+  const sun = new THREE.Vector3(Math.cos(theta) * Math.cos(phi), Math.sin(theta), Math.cos(theta) * Math.sin(phi));
+  return { sun, horizon };
+}
+
+/** Points the water glint and the key light at the sun in the sky image. */
+function alignToSkyImage() {
+  if (!skyInfo) return;
+  const dir = skyInfo.sun.clone().applyEuler(scene.backgroundRotation);
+  water.material.uniforms.sunDirection.value.copy(dir);
+  moonLight.position.copy(dir).multiplyScalar(100);
+  scene.fog.color.copy(skyInfo.horizon).multiplyScalar(settings.skyBrightness);
 }
 
 function useGeneratedSky() {
   skyImage?.dispose();
   imageEnv?.dispose();
-  skyImage = imageEnv = null;
+  skyImage = imageEnv = skyInfo = null;
+  scene.fog.color.set(0x9aa7b6);
+  document.getElementById("generated-controls").hidden = false;
   document.getElementById("sky-source").textContent = "Generated clouds";
   document.getElementById("generated-sky").hidden = true;
   applySkyTransform();
@@ -114,50 +187,15 @@ function applySkyTransform() {
   scene.backgroundRotation.set(0, r, 0);
   scene.environmentRotation.set(0, r, 0);
   scene.backgroundIntensity = settings.skyBrightness;
+  scene.environmentIntensity = skyImage ? settings.skyBrightness * 0.8 : 0.9;
+  alignToSkyImage();
 }
 
 // --- Water -----------------------------------------------------------------------
-/**
- * Tileable ripple normal map from sine waves with integer frequencies, so the
- * scene needs no texture files.
- */
-function createWaterNormals(size = 256) {
-  const waves = Array.from({ length: 28 }, (_, i) => {
-    const angle = Math.random() * Math.PI * 2;
-    const f = 2 + Math.floor(Math.random() * (6 + i));
-    return { fx: Math.round(Math.cos(angle) * f), fy: Math.round(Math.sin(angle) * f), amp: 1 / (f * 0.6), phase: Math.random() * Math.PI * 2 };
-  });
-  const data = new Uint8Array(size * size * 4);
-  const n = new THREE.Vector3();
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
-      let dx = 0, dy = 0;
-      for (const w of waves) {
-        const c = Math.cos(((w.fx * x + w.fy * y) / size) * Math.PI * 2 + w.phase) * w.amp;
-        dx += c * w.fx;
-        dy += c * w.fy;
-      }
-      n.set(-dx * 0.06, -dy * 0.06, 1).normalize();
-      const i = (y * size + x) * 4;
-      data[i] = (n.x * 0.5 + 0.5) * 255;
-      data[i + 1] = (n.y * 0.5 + 0.5) * 255;
-      data[i + 2] = (n.z * 0.5 + 0.5) * 255;
-      data[i + 3] = 255;
-    }
-  }
-  const tex = new THREE.DataTexture(data, size, size);
-  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-  tex.generateMipmaps = true;
-  tex.minFilter = THREE.LinearMipmapLinearFilter;
-  tex.magFilter = THREE.LinearFilter;
-  tex.needsUpdate = true;
-  return tex;
-}
-
 const water = new Water(new THREE.PlaneGeometry(6000, 6000), {
   textureWidth: LOW ? 256 : 1024,
   textureHeight: LOW ? 256 : 1024,
-  waterNormals: createWaterNormals(),
+  waterNormals: new THREE.TextureLoader().load(waterNormalsUrl, (t) => (t.wrapS = t.wrapT = THREE.RepeatWrapping)),
   sunDirection: new THREE.Vector3(),
   sunColor: 0xf2f6ff,
   waterColor: 0x05080d,
@@ -199,11 +237,11 @@ const wake = new THREE.Mesh(
         float d = vUv.y;                     // 0 at the stern, 1 far behind
         float x = (vUv.x - 0.5) * 2.0;       // -1..1 across
         float spread = 0.12 + d * 0.85;      // V opens behind the boat
-        float arms = exp(-pow((abs(x) - spread) / (0.03 + d * 0.05), 2.0));
+        float arms = exp(-pow((abs(x) - spread) / (0.06 + d * 0.12), 2.0));
         float prop = exp(-pow(x / (0.08 + d * 0.25), 2.0)) * (1.0 - d);
         float n = noise(vec2(x * 18.0, d * 60.0 - uTime * 1.5));
         float a = (arms * 0.6 + prop * 0.9) * (0.5 + 0.5 * n) * pow(1.0 - d, 1.6);
-        gl_FragColor = vec4(vec3(0.75, 0.8, 0.86) * a * 0.35 * uStrength, 1.0);
+        gl_FragColor = vec4(vec3(0.75, 0.8, 0.86) * a * 0.1 * uStrength, 1.0);
       }
     `,
   }),
@@ -323,10 +361,11 @@ for (const name of Object.keys(VIEWS)) {
 document.getElementById("cruise").addEventListener("change", (e) => (settings.cruise = e.target.checked));
 
 const waterControls = document.getElementById("water-controls");
+const generatedControls = document.getElementById("generated-controls");
 const deg = (v) => `${v}°`;
-slider(waterControls, { key: "moonElevation", label: "Moon height", min: 2, max: 60, step: 1, format: deg, onChange: renderSky });
-slider(waterControls, { key: "moonAzimuth", label: "Moon bearing", min: -180, max: 180, step: 1, format: deg, onChange: renderSky });
-slider(waterControls, { key: "coverage", label: "Cloud cover", min: 0.3, max: 0.9, step: 0.01, format: (v) => `${Math.round(v * 100)}%`, onChange: renderSky });
+slider(generatedControls, { key: "moonElevation", label: "Moon height", min: 2, max: 60, step: 1, format: deg, onChange: renderSky });
+slider(generatedControls, { key: "moonAzimuth", label: "Moon bearing", min: -180, max: 180, step: 1, format: deg, onChange: renderSky });
+slider(generatedControls, { key: "coverage", label: "Cloud cover", min: 0.3, max: 0.9, step: 0.01, format: (v) => `${Math.round(v * 100)}%`, onChange: renderSky });
 slider(waterControls, { key: "mist", label: "Horizon mist", min: 0, max: 3, step: 0.05, format: (v) => v.toFixed(2), onChange: renderSky });
 slider(waterControls, { key: "ripples", label: "Ripples", min: 0, max: 4, step: 0.05, format: (v) => v.toFixed(2), onInput: (v) => (water.material.uniforms.distortionScale.value = v) });
 slider(waterControls, { key: "exposure", label: "Exposure", min: 0.3, max: 1.6, step: 0.01, format: (v) => v.toFixed(2), onInput: (v) => (renderer.toneMappingExposure = v) });
@@ -346,6 +385,15 @@ document.getElementById("new-sky").addEventListener("click", () => {
 });
 
 const skyControls = document.getElementById("sky-controls");
+const gradeControls = document.getElementById("grade-controls");
+const setGrade = () => {
+  grade.uniforms.uSaturation.value = settings.saturation;
+  grade.uniforms.uContrast.value = settings.contrast;
+  grade.uniforms.uCool.value = settings.coolness;
+};
+slider(gradeControls, { key: "saturation", label: "Colour", min: 0, max: 1.2, step: 0.01, format: (v) => `${Math.round(v * 100)}%`, onInput: setGrade });
+slider(gradeControls, { key: "contrast", label: "Contrast", min: 0.7, max: 1.6, step: 0.01, format: (v) => v.toFixed(2), onInput: setGrade });
+slider(gradeControls, { key: "coolness", label: "Cool tint", min: 0, max: 1, step: 0.01, format: (v) => v.toFixed(2), onInput: setGrade });
 slider(skyControls, { key: "skyRotation", label: "Sky rotation", min: -180, max: 180, step: 1, format: deg, onInput: applySkyTransform });
 slider(skyControls, { key: "skyBrightness", label: "Sky brightness", min: 0.2, max: 2, step: 0.01, format: (v) => v.toFixed(2), onInput: applySkyTransform });
 
@@ -388,10 +436,50 @@ slider(cameraControls, {
 toggle(cameraControls, { key: "autoOrbit", label: "Slow orbit" });
 slider(cameraControls, { key: "orbitSpeed", label: "Orbit speed", min: 0.1, max: 2, step: 0.05, format: (v) => v.toFixed(2) });
 
+// --- Colour grading ----------------------------------------------------------------
+// Applied to the whole frame in linear light, before tone mapping (OutputPass):
+// desaturate, cool the tint and add contrast for the moody blue-grey look.
+const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType }));
+composer.addPass(new RenderPass(scene, camera));
+const grade = new ShaderPass({
+  uniforms: {
+    tDiffuse: { value: null },
+    uSaturation: { value: settings.saturation },
+    uContrast: { value: settings.contrast },
+    uCool: { value: settings.coolness },
+  },
+  vertexShader: /* glsl */ `
+    varying vec2 vUv;
+    void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }
+  `,
+  fragmentShader: /* glsl */ `
+    uniform sampler2D tDiffuse;
+    uniform float uSaturation;
+    uniform float uContrast;
+    uniform float uCool;
+    varying vec2 vUv;
+    void main() {
+      vec4 tex = texture2D(tDiffuse, vUv);
+      vec3 c = max(tex.rgb, 0.0);
+      float luma = dot(c, vec3(0.2126, 0.7152, 0.0722));
+      c = mix(vec3(luma), c, uSaturation);
+      c *= mix(vec3(1.0), vec3(0.86, 0.95, 1.12), uCool);
+      // Contrast around middle grey, in log space so highlights survive.
+      c = 0.18 * pow(c / 0.18 + 1e-5, vec3(uContrast));
+      gl_FragColor = vec4(c, tex.a);
+    }
+  `,
+});
+composer.addPass(grade);
+composer.addPass(new OutputPass());
+composer.setPixelRatio(renderer.getPixelRatio());
+composer.setSize(window.innerWidth, window.innerHeight);
+
 window.addEventListener("resize", () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
+  composer.setSize(window.innerWidth, window.innerHeight);
 });
 
 // --- Start -----------------------------------------------------------------------
@@ -401,11 +489,19 @@ lastBoatPos.copy(boatPos);
 camera.position.copy(boatPos).add(boatToWorld(VIEWS.Horizon));
 controls.target.copy(boatPos).add(new THREE.Vector3(0, 1.4, 0));
 document.querySelector('#view-buttons button[data-view="Horizon"]').setAttribute("aria-pressed", "true");
-renderSky();
 
-// A sky image placed next to this file (sky.hdr, sky.exr, sky.jpg, ...) is used automatically.
+// A sky image placed next to this file (sky.hdr, sky.exr, sky.jpg, ...) is used
+// automatically; otherwise the clouds are generated.
 const bundledSky = Object.entries(import.meta.glob("./sky.{hdr,exr,jpg,jpeg,png,webp}", { query: "?url", import: "default", eager: true }));
-if (bundledSky.length) loadSkyImage(bundledSky[0][1], bundledSky[0][0]);
+if (bundledSky.length) {
+  scene.background = new THREE.Color(0x8f98a3); // until the image arrives
+  loadSkyImage(bundledSky[0][1], bundledSky[0][0]).catch((err) => {
+    console.error(err);
+    renderSky();
+  });
+} else {
+  renderSky();
+}
 
 // Handle for poking at the scene from the console: open with ?debug.
 if (new URLSearchParams(location.search).has("debug")) window.debug = { THREE, scene, camera, controls, sky, settings, renderSky, renderer, loadSkyImage };
@@ -419,5 +515,5 @@ renderer.setAnimationLoop((timestamp) => {
   updateCamera(dt);
   water.material.uniforms.time.value = t * 0.25;
   controls.update(dt);
-  renderer.render(scene, camera);
+  composer.render(dt);
 });
