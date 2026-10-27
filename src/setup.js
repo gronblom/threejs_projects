@@ -2,7 +2,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
-export function createScene({ fov = 60, position = [4, 3, 6], background = 0x0b0d12 } = {}) {
+export function createScene({ fov = 60, position = [4, 3, 6], background = 0x0b0d12, far = 1000 } = {}) {
   const renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(window.innerWidth, window.innerHeight);
@@ -11,7 +11,7 @@ export function createScene({ fov = 60, position = [4, 3, 6], background = 0x0b0
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(background);
 
-  const camera = new THREE.PerspectiveCamera(fov, window.innerWidth / window.innerHeight, 0.1, 1000);
+  const camera = new THREE.PerspectiveCamera(fov, window.innerWidth / window.innerHeight, 0.1, far);
   camera.position.set(...position);
 
   const controls = new OrbitControls(camera, renderer.domElement);
@@ -23,11 +23,12 @@ export function createScene({ fov = 60, position = [4, 3, 6], background = 0x0b0
     renderer.setSize(window.innerWidth, window.innerHeight);
   });
 
-  const clock = new THREE.Clock();
+  const timer = new THREE.Timer();
   /** Starts the render loop; `update(elapsedSeconds, deltaSeconds)` runs every frame. */
   function animate(update = () => {}) {
-    renderer.setAnimationLoop(() => {
-      update(clock.getElapsedTime(), clock.getDelta());
+    renderer.setAnimationLoop((timestamp) => {
+      timer.update(timestamp);
+      update(timer.getElapsed(), timer.getDelta());
       controls.update();
       renderer.render(scene, camera);
     });
