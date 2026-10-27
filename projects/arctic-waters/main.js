@@ -1,89 +1,94 @@
-// Arctic Waters: a calm polar sea at low sun, with procedural icebergs,
-// drifting ice floes, light snowfall and a physically based sky.
+// Arctic Waters: a lone boat on a mirror-calm sea under a moonlit storm.
+// Recreation of a scene shared on r/threejs ("Arctic waters in three.js").
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { Water } from "three/addons/objects/Water.js";
-import { Sky } from "three/addons/objects/Sky.js";
-import GUI from "three/addons/libs/lil-gui.module.min.js";
-import { createScene } from "../../src/setup.js";
-import { createNoise3D, fbm } from "../../src/noise.js";
+import { StormSky } from "./sky.js";
+import { createBoat } from "./boat.js";
 
-const { THREE, renderer, scene, camera, controls, animate } = createScene({
-  fov: 50,
-  position: [-38, 9, 58],
-  far: 20000,
-});
+// ?quality=low lowers the sky and reflection resolution for weak GPUs.
+const LOW = new URLSearchParams(location.search).get("quality") === "low";
+
+// --- Renderer, camera ----------------------------------------------------------
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(LOW ? 1 : Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 0.55;
-controls.target.set(0, 4, 0);
-controls.maxPolarAngle = Math.PI * 0.495; // stay above the water
-controls.minDistance = 10;
-controls.maxDistance = 400;
+renderer.domElement.classList.add("scene");
+document.body.prepend(renderer.domElement);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 3000);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.maxPolarAngle = Math.PI * 0.49;
+controls.minDistance = 5;
+controls.maxDistance = 120;
 
 const settings = {
-  elevation: 4, // sun height above the horizon, degrees
-  azimuth: 200,
-  exposure: 0.55,
-  waterColor: "#0b2f3a",
-  distortion: 2.2,
-  fog: 0.0012,
-  snow: true,
+  moonElevation: 18,
+  moonAzimuth: 0,
+  coverage: 0.68,
+  mist: 1.0,
+  ripples: 0.35,
+  exposure: 0.8,
+  spotlight: true,
+  fov: 45,
+  autoOrbit: false,
+  orbitSpeed: 0.4,
+  cruise: true,
+  seed: 3,
 };
 
-// --- Sky and sun -------------------------------------------------------------
-const sky = new Sky();
-sky.scale.setScalar(10000);
-scene.add(sky);
-sky.material.uniforms.turbidity.value = 6;
-sky.material.uniforms.rayleigh.value = 1.6;
-sky.material.uniforms.mieCoefficient.value = 0.004;
-sky.material.uniforms.mieDirectionalG.value = 0.85;
+// --- Sky -------------------------------------------------------------------------
+const sky = new StormSky(renderer, { size: LOW ? 512 : 1024 });
+scene.background = sky.texture;
+scene.fog = new THREE.FogExp2(0x9aa7b6, 0.0035);
 
-const sun = new THREE.Vector3();
-const sunLight = new THREE.DirectionalLight(0xffd9b0, 2.2);
-scene.add(sunLight);
-scene.add(new THREE.HemisphereLight(0xbcd7ff, 0x0d2a36, 0.7));
-scene.fog = new THREE.FogExp2(0xc4cbd2, settings.fog);
+const moonLight = new THREE.DirectionalLight(0xdfe7f2, 1.2);
+scene.add(moonLight, moonLight.target);
 
-// --- Water -------------------------------------------------------------------
-const water = new Water(new THREE.PlaneGeometry(10000, 10000), {
-  textureWidth: 512,
-  textureHeight: 512,
-  waterNormals: createWaterNormals(256),
-  sunDirection: new THREE.Vector3(),
-  sunColor: 0xffe2c0,
-  waterColor: new THREE.Color(settings.waterColor),
-  distortionScale: settings.distortion,
-  fog: true,
-});
-water.rotation.x = -Math.PI / 2;
-water.material.uniforms.size.value = 6;
-scene.add(water);
+function moonDirection() {
+  const phi = THREE.MathUtils.degToRad(90 - settings.moonElevation);
+  const theta = THREE.MathUtils.degToRad(settings.moonAzimuth);
+  return new THREE.Vector3().setFromSphericalCoords(1, phi, theta);
+}
 
+function renderSky() {
+  const dir = moonDirection();
+  sky.uniforms.uCoverage.value = settings.coverage;
+  sky.uniforms.uMoonDir.value.copy(dir);
+  sky.uniforms.uMist.value = settings.mist;
+  sky.uniforms.uSeed.value = settings.seed;
+  scene.environment = sky.update();
+  scene.environmentIntensity = 0.9;
+  water.material.uniforms.sunDirection.value.copy(dir);
+  moonLight.position.copy(dir).multiplyScalar(100);
+  scene.fog.density = 0.0035 * settings.mist;
+}
+
+// --- Water -----------------------------------------------------------------------
 /**
- * Tileable normal map built from a sum of sine waves with integer frequencies
- * (so it repeats seamlessly), avoiding the need for an external texture file.
+ * Tileable ripple normal map from sine waves with integer frequencies, so the
+ * scene needs no texture files.
  */
-function createWaterNormals(size) {
-  const waves = Array.from({ length: 24 }, (_, i) => {
+function createWaterNormals(size = 256) {
+  const waves = Array.from({ length: 28 }, (_, i) => {
     const angle = Math.random() * Math.PI * 2;
     const f = 2 + Math.floor(Math.random() * (6 + i));
-    return {
-      fx: Math.round(Math.cos(angle) * f),
-      fy: Math.round(Math.sin(angle) * f),
-      amp: 1 / (f * 0.6),
-      phase: Math.random() * Math.PI * 2,
-    };
+    return { fx: Math.round(Math.cos(angle) * f), fy: Math.round(Math.sin(angle) * f), amp: 1 / (f * 0.6), phase: Math.random() * Math.PI * 2 };
   });
   const data = new Uint8Array(size * size * 4);
+  const n = new THREE.Vector3();
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       let dx = 0, dy = 0;
       for (const w of waves) {
-        const a = ((w.fx * x + w.fy * y) / size) * Math.PI * 2 + w.phase;
-        const c = Math.cos(a) * w.amp;
+        const c = Math.cos(((w.fx * x + w.fy * y) / size) * Math.PI * 2 + w.phase) * w.amp;
         dx += c * w.fx;
         dy += c * w.fy;
       }
-      const n = new THREE.Vector3(-dx * 0.08, -dy * 0.08, 1).normalize();
+      n.set(-dx * 0.06, -dy * 0.06, 1).normalize();
       const i = (y * size + x) * 4;
       data[i] = (n.x * 0.5 + 0.5) * 255;
       data[i + 1] = (n.y * 0.5 + 0.5) * 255;
@@ -95,172 +100,243 @@ function createWaterNormals(size) {
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
   tex.generateMipmaps = true;
   tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.magFilter = THREE.LinearFilter;
   tex.needsUpdate = true;
   return tex;
 }
 
-// --- Icebergs ----------------------------------------------------------------
-const iceMaterial = new THREE.MeshStandardMaterial({
-  color: 0xeaf6ff,
-  emissive: 0x2a6a8a,
-  emissiveIntensity: 0.12,
-  roughness: 0.55,
-  metalness: 0,
-  flatShading: true,
+const water = new Water(new THREE.PlaneGeometry(6000, 6000), {
+  textureWidth: LOW ? 256 : 1024,
+  textureHeight: LOW ? 256 : 1024,
+  waterNormals: createWaterNormals(),
+  sunDirection: new THREE.Vector3(),
+  sunColor: 0xf2f6ff,
+  waterColor: 0x05080d,
+  distortionScale: settings.ripples,
+  fog: true,
 });
+water.rotation.x = -Math.PI / 2;
+// Calm water: reflect more than three's default (rf0 = 0.02) at steep angles.
+water.material.fragmentShader = water.material.fragmentShader.replace("float rf0 = 0.02;", "float rf0 = 0.22;");
+water.material.uniforms.size.value = 0.8;
+scene.add(water);
 
-/**
- * A berg is a displaced icosphere: stretched, noise-eroded, with the top
- * optionally sheared flat (tabular berg) and most of its mass under water.
- */
-function createIceberg({ seed, radius, height, tabular }) {
-  const noise = createNoise3D(seed);
-  const geo = new THREE.IcosahedronGeometry(1, 5);
-  const pos = geo.attributes.position;
-  const v = new THREE.Vector3();
-  for (let i = 0; i < pos.count; i++) {
-    v.fromBufferAttribute(pos, i);
-    const d = 1 + 0.35 * fbm(noise, v.x * 1.3, v.y * 1.3, v.z * 1.3, 4) + 0.12 * noise(v.x * 6, v.y * 6, v.z * 6);
-    v.multiplyScalar(d);
-    v.x *= radius;
-    v.z *= radius * (0.7 + 0.3 * Math.abs(noise(seed, 0.5, 0.5)));
-    v.y = v.y * height;
-    if (tabular && v.y > height * 0.55) v.y = height * 0.55 + (v.y - height * 0.55) * 0.08;
-    v.y -= height * 0.35; // sink: roughly a third stays above the waterline
-    pos.setXYZ(i, v.x, v.y, v.z);
-  }
-  geo.computeVertexNormals();
-  return new THREE.Mesh(geo, iceMaterial);
-}
+// --- Boat and wake ---------------------------------------------------------------
+const boat = createBoat();
+scene.add(boat);
 
-const bergs = [
-  { seed: 3, radius: 14, height: 16, tabular: true, x: 6, z: -10, rot: 0.4 },
-  { seed: 11, radius: 6, height: 12, tabular: false, x: -26, z: 8, rot: 1.2 },
-  { seed: 7, radius: 9, height: 9, tabular: true, x: 40, z: 22, rot: 2.1 },
-  { seed: 19, radius: 4, height: 7, tabular: false, x: -12, z: 30, rot: 0.2 },
-  { seed: 23, radius: 22, height: 20, tabular: true, x: -70, z: -110, rot: 0.9 },
-  { seed: 29, radius: 16, height: 26, tabular: false, x: 110, z: -160, rot: 1.7 },
-  { seed: 31, radius: 30, height: 18, tabular: true, x: -200, z: -260, rot: 2.6 },
-].map((b) => {
-  const mesh = createIceberg(b);
-  mesh.position.set(b.x, 0, b.z);
-  mesh.rotation.y = b.rot;
-  scene.add(mesh);
-  return { mesh, phase: b.seed };
-});
-
-// --- Ice floes (instanced flat chunks) ---------------------------------------
-const floeGeo = (() => {
-  const g = new THREE.CylinderGeometry(1, 1, 0.35, 11, 1);
-  const p = g.attributes.position;
-  for (let i = 0; i < p.count; i++) {
-    const a = Math.atan2(p.getZ(i), p.getX(i));
-    const r = 0.7 + 0.22 * Math.sin(a * 3 + 1) * Math.cos(a * 2) + 0.12 * Math.sin(a * 7);
-    if (Math.hypot(p.getX(i), p.getZ(i)) > 0.01) p.setXYZ(i, Math.cos(a) * r, p.getY(i), Math.sin(a) * r);
-  }
-  g.computeVertexNormals();
-  return g;
-})();
-const FLOES = 260;
-const floes = new THREE.InstancedMesh(floeGeo, iceMaterial, FLOES);
-const floeData = [];
-const m = new THREE.Matrix4();
-for (let i = 0; i < FLOES; i++) {
-  const r = 18 + Math.random() ** 0.7 * 160;
-  const a = Math.random() * Math.PI * 2;
-  floeData.push({
-    x: Math.cos(a) * r,
-    z: Math.sin(a) * r,
-    s: 0.4 + Math.random() ** 2 * 3.2,
-    rot: Math.random() * Math.PI * 2,
-    phase: Math.random() * 10,
-  });
-}
-scene.add(floes);
-
-function updateFloes(t) {
-  const q = new THREE.Quaternion();
-  const e = new THREE.Euler();
-  floeData.forEach((f, i) => {
-    e.set(Math.sin(t * 0.7 + f.phase) * 0.04, f.rot + t * 0.01, Math.cos(t * 0.6 + f.phase) * 0.04);
-    q.setFromEuler(e);
-    m.compose(
-      new THREE.Vector3(f.x + Math.sin(t * 0.05 + f.phase) * 0.6, 0.02 + Math.sin(t * 0.9 + f.phase) * 0.05, f.z),
-      q,
-      new THREE.Vector3(f.s, 1, f.s * (0.6 + 0.4 * Math.sin(f.phase))),
-    );
-    floes.setMatrixAt(i, m);
-  });
-  floes.instanceMatrix.needsUpdate = true;
-}
-
-// --- Snow --------------------------------------------------------------------
-const SNOW = 4000;
-const snowPositions = new Float32Array(SNOW * 3);
-for (let i = 0; i < SNOW; i++) {
-  snowPositions.set([(Math.random() - 0.5) * 200, Math.random() * 60, (Math.random() - 0.5) * 200], i * 3);
-}
-const snowGeo = new THREE.BufferGeometry();
-snowGeo.setAttribute("position", new THREE.BufferAttribute(snowPositions, 3));
-const snow = new THREE.Points(
-  snowGeo,
-  new THREE.PointsMaterial({ color: 0xffffff, size: 0.18, transparent: true, opacity: 0.8, depthWrite: false }),
+const wake = new THREE.Mesh(
+  new THREE.PlaneGeometry(14, 60, 1, 1).rotateX(-Math.PI / 2).translate(0, 0.03, -30 - 4),
+  new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    uniforms: { uTime: { value: 0 }, uStrength: { value: 1 } },
+    vertexShader: /* glsl */ `
+      varying vec2 vUv;
+      void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }
+    `,
+    fragmentShader: /* glsl */ `
+      varying vec2 vUv;
+      uniform float uTime;
+      uniform float uStrength;
+      float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+      float noise(vec2 p) {
+        vec2 i = floor(p), f = fract(p);
+        f = f * f * (3.0 - 2.0 * f);
+        return mix(mix(hash(i), hash(i + vec2(1, 0)), f.x), mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), f.x), f.y);
+      }
+      void main() {
+        float d = vUv.y;                     // 0 at the stern, 1 far behind
+        float x = (vUv.x - 0.5) * 2.0;       // -1..1 across
+        float spread = 0.12 + d * 0.85;      // V opens behind the boat
+        float arms = exp(-pow((abs(x) - spread) / (0.03 + d * 0.05), 2.0));
+        float prop = exp(-pow(x / (0.08 + d * 0.25), 2.0)) * (1.0 - d);
+        float n = noise(vec2(x * 18.0, d * 60.0 - uTime * 1.5));
+        float a = (arms * 0.6 + prop * 0.9) * (0.5 + 0.5 * n) * pow(1.0 - d, 1.6);
+        gl_FragColor = vec4(vec3(0.75, 0.8, 0.86) * a * 0.35 * uStrength, 1.0);
+      }
+    `,
+  }),
 );
-scene.add(snow);
+boat.add(wake);
 
-function updateSnow(dt) {
-  const p = snowGeo.attributes.position;
-  for (let i = 0; i < SNOW; i++) {
-    let y = p.getY(i) - dt * (1.5 + (i % 7) * 0.2);
-    if (y < 0) y += 60;
-    p.setY(i, y);
-    p.setX(i, p.getX(i) + Math.sin(y * 0.3 + i) * dt * 0.3);
+// The boat runs a slow, wide circle.
+const path = { radius: 90, speed: 2.2, angle: 0, heading: 0 };
+const boatPos = new THREE.Vector3();
+const lastBoatPos = new THREE.Vector3();
+
+function placeBoat(t, dt) {
+  if (settings.cruise) path.angle += (path.speed / path.radius) * dt;
+  boatPos.set(Math.cos(path.angle) * path.radius, 0, Math.sin(path.angle) * path.radius);
+  path.heading = -path.angle; // tangent direction for counter-clockwise travel
+  boat.position.set(boatPos.x, Math.sin(t * 0.9) * 0.04 - 0.02, boatPos.z);
+  boat.rotation.set(Math.sin(t * 0.7) * 0.012, path.heading, Math.sin(t * 0.55 + 1) * 0.02);
+  wake.material.uniforms.uTime.value = t;
+  wake.material.uniforms.uStrength.value = THREE.MathUtils.lerp(wake.material.uniforms.uStrength.value, settings.cruise ? 1 : 0, dt);
+}
+
+// --- Views -----------------------------------------------------------------------
+// Camera offsets in the boat's frame (x: starboard, y: up, z: forward).
+const VIEWS = {
+  Horizon: new THREE.Vector3(10, 2.2, 26),
+  Stern: new THREE.Vector3(4, 5, -13),
+  Aerial: new THREE.Vector3(2, 34, -10),
+  Broadside: new THREE.Vector3(-22, 3, 2),
+  "Low water": new THREE.Vector3(6, 0.6, 12),
+  Wide: new THREE.Vector3(-34, 9, 48),
+};
+let transition = null;
+
+function boatToWorld(offset) {
+  return offset.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), path.heading);
+}
+
+function goToView(name) {
+  transition = {
+    from: camera.position.clone().sub(boatPos),
+    to: boatToWorld(VIEWS[name]),
+    t: 0,
+  };
+  document.querySelectorAll("#view-buttons button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.view === name)));
+}
+
+function updateCamera(dt) {
+  // Carry the camera along with the boat so the framing holds.
+  camera.position.add(boatPos.clone().sub(lastBoatPos));
+  if (transition) {
+    transition.t = Math.min(1, transition.t + dt / 2.2);
+    const e = transition.t < 0.5 ? 4 * transition.t ** 3 : 1 - (-2 * transition.t + 2) ** 3 / 2;
+    camera.position.copy(boatPos).add(transition.from.clone().lerp(transition.to, e));
+    if (transition.t >= 1) transition = null;
   }
-  p.needsUpdate = true;
-  // Keep the snow volume around the camera.
-  snow.position.set(camera.position.x, 0, camera.position.z);
+  controls.target.copy(boatPos).add(new THREE.Vector3(0, 1.4, 0));
+  controls.autoRotate = settings.autoOrbit && !transition;
+  controls.autoRotateSpeed = settings.orbitSpeed;
+  lastBoatPos.copy(boatPos);
 }
 
-// --- Sun position, environment lighting --------------------------------------
-const pmrem = new THREE.PMREMGenerator(renderer);
-const skyScene = new THREE.Scene();
-let envTarget;
-
-function updateSun() {
-  const phi = THREE.MathUtils.degToRad(90 - settings.elevation);
-  const theta = THREE.MathUtils.degToRad(settings.azimuth);
-  sun.setFromSphericalCoords(1, phi, theta);
-  sky.material.uniforms.sunPosition.value.copy(sun);
-  water.material.uniforms.sunDirection.value.copy(sun).normalize();
-  sunLight.position.copy(sun).multiplyScalar(100);
-
-  // Reflections and ambient light come from the sky itself.
-  envTarget?.dispose();
-  skyScene.add(sky);
-  envTarget = pmrem.fromScene(skyScene);
-  scene.add(sky);
-  scene.environment = envTarget.texture;
-}
-updateSun();
-
-// --- Controls ----------------------------------------------------------------
-const gui = new GUI({ title: "Arctic Waters" });
-gui.add(settings, "elevation", -2, 30, 0.1).name("sun elevation").onChange(updateSun);
-gui.add(settings, "azimuth", 0, 360, 1).name("sun azimuth").onChange(updateSun);
-gui.add(settings, "exposure", 0.1, 1.5, 0.01).onChange((v) => (renderer.toneMappingExposure = v));
-gui.addColor(settings, "waterColor").name("water colour").onChange((v) => water.material.uniforms.waterColor.value.set(v));
-gui.add(settings, "distortion", 0, 8, 0.1).onChange((v) => (water.material.uniforms.distortionScale.value = v));
-gui.add(settings, "fog", 0, 0.01, 0.0001).onChange((v) => (scene.fog.density = v));
-gui.add(settings, "snow").onChange((v) => (snow.visible = v));
-if (window.innerWidth < 700) gui.close();
-
-// --- Loop --------------------------------------------------------------------
-animate((t, dt) => {
-  water.material.uniforms.time.value = t * 0.35;
-  bergs.forEach(({ mesh, phase }) => {
-    mesh.position.y = Math.sin(t * 0.4 + phase) * 0.12;
-    mesh.rotation.z = Math.sin(t * 0.3 + phase) * 0.006;
+// --- UI --------------------------------------------------------------------------
+function slider(container, { key, label, min, max, step, format = (v) => v, onInput, onChange }) {
+  const id = `ctl-${key}`;
+  const row = document.createElement("label");
+  row.className = "row";
+  row.htmlFor = id;
+  row.innerHTML = `<span>${label}</span><input type="range" id="${id}" min="${min}" max="${max}" step="${step}" value="${settings[key]}"><output></output>`;
+  const input = row.querySelector("input");
+  const out = row.querySelector("output");
+  const sync = () => {
+    out.textContent = format(settings[key]);
+    input.style.setProperty("--fill", `${((settings[key] - min) / (max - min)) * 100}%`);
+  };
+  input.addEventListener("input", () => {
+    settings[key] = Number(input.value);
+    sync();
+    onInput?.(settings[key]);
   });
-  updateFloes(t);
-  if (snow.visible) updateSnow(Math.min(dt, 0.05));
+  input.addEventListener("change", () => onChange?.(settings[key]));
+  sync();
+  container.append(row);
+}
+
+function toggle(container, { key, label, onChange }) {
+  const row = document.createElement("label");
+  row.className = "row toggle";
+  row.innerHTML = `<span>${label}</span><input type="checkbox" id="ctl-${key}" ${settings[key] ? "checked" : ""}>`;
+  row.querySelector("input").addEventListener("change", (e) => {
+    settings[key] = e.target.checked;
+    onChange?.(settings[key]);
+  });
+  container.append(row);
+}
+
+// Tabs open one panel at a time.
+const tabs = document.querySelectorAll(".tabs button");
+tabs.forEach((tab) =>
+  tab.addEventListener("click", () => {
+    const open = tab.getAttribute("aria-expanded") !== "true";
+    tabs.forEach((t) => {
+      t.setAttribute("aria-expanded", String(open && t === tab));
+      document.getElementById(`panel-${t.dataset.panel}`).hidden = !(open && t === tab);
+    });
+  }),
+);
+
+const viewButtons = document.getElementById("view-buttons");
+for (const name of Object.keys(VIEWS)) {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.textContent = name;
+  b.dataset.view = name;
+  b.addEventListener("click", () => goToView(name));
+  viewButtons.append(b);
+}
+document.getElementById("cruise").addEventListener("change", (e) => (settings.cruise = e.target.checked));
+
+const waterControls = document.getElementById("water-controls");
+const deg = (v) => `${v}°`;
+slider(waterControls, { key: "moonElevation", label: "Moon height", min: 2, max: 60, step: 1, format: deg, onChange: renderSky });
+slider(waterControls, { key: "moonAzimuth", label: "Moon bearing", min: -180, max: 180, step: 1, format: deg, onChange: renderSky });
+slider(waterControls, { key: "coverage", label: "Cloud cover", min: 0.3, max: 0.9, step: 0.01, format: (v) => `${Math.round(v * 100)}%`, onChange: renderSky });
+slider(waterControls, { key: "mist", label: "Horizon mist", min: 0, max: 3, step: 0.05, format: (v) => v.toFixed(2), onChange: renderSky });
+slider(waterControls, { key: "ripples", label: "Ripples", min: 0, max: 4, step: 0.05, format: (v) => v.toFixed(2), onInput: (v) => (water.material.uniforms.distortionScale.value = v) });
+slider(waterControls, { key: "exposure", label: "Exposure", min: 0.3, max: 1.6, step: 0.01, format: (v) => v.toFixed(2), onInput: (v) => (renderer.toneMappingExposure = v) });
+toggle(waterControls, {
+  key: "spotlight",
+  label: "Boat spotlight",
+  onChange: (v) => {
+    const { spot, lens } = boat.userData.lights;
+    spot.visible = v;
+    lens.material.color.set(v ? 0xfff6e8 : 0x30343a);
+  },
+});
+document.getElementById("new-sky").addEventListener("click", () => {
+  settings.seed = Math.round(Math.random() * 1000) / 10;
+  renderSky();
+});
+
+const cameraControls = document.getElementById("camera-controls");
+slider(cameraControls, {
+  key: "fov",
+  label: "Field of view",
+  min: 20,
+  max: 80,
+  step: 1,
+  format: deg,
+  onInput: (v) => {
+    camera.fov = v;
+    camera.updateProjectionMatrix();
+  },
+});
+toggle(cameraControls, { key: "autoOrbit", label: "Slow orbit" });
+slider(cameraControls, { key: "orbitSpeed", label: "Orbit speed", min: 0.1, max: 2, step: 0.05, format: (v) => v.toFixed(2) });
+
+window.addEventListener("resize", () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// --- Start -----------------------------------------------------------------------
+renderer.toneMappingExposure = settings.exposure;
+placeBoat(0, 0);
+lastBoatPos.copy(boatPos);
+camera.position.copy(boatPos).add(boatToWorld(VIEWS.Horizon));
+controls.target.copy(boatPos).add(new THREE.Vector3(0, 1.4, 0));
+document.querySelector('#view-buttons button[data-view="Horizon"]').setAttribute("aria-pressed", "true");
+renderSky();
+
+// Handle for poking at the scene from the console: open with ?debug.
+if (new URLSearchParams(location.search).has("debug")) window.debug = { THREE, scene, camera, controls, sky, settings, renderSky, renderer };
+
+const timer = new THREE.Timer();
+renderer.setAnimationLoop((timestamp) => {
+  timer.update(timestamp);
+  const t = timer.getElapsed();
+  const dt = Math.min(timer.getDelta(), 0.1);
+  placeBoat(t, dt);
+  updateCamera(dt);
+  water.material.uniforms.time.value = t * 0.25;
+  controls.update(dt);
+  renderer.render(scene, camera);
 });

@@ -6,7 +6,7 @@ Live: https://gronblom.github.io/threejs_projects/
 
 | Project | What it shows |
 | --- | --- |
-| [Arctic Waters](projects/arctic-waters/) | Polar sea at low sun: procedural icebergs, ice floes, snow, sky and water shaders |
+| [Arctic Waters](projects/arctic-waters/) | A boat on a mirror-calm sea under ray-marched storm clouds (recreation of an r/threejs post) |
 | [Basics](projects/basics/) | Meshes, materials, lights and shadows |
 | [Galaxy](projects/galaxy/) | A spiral galaxy of 60,000 particles |
 | [Terrain](projects/terrain/) | Procedural landscape with water and fog |

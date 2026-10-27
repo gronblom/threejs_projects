@@ -2,13 +2,39 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Arctic Waters · three.js projects</title>
-    <link rel="stylesheet" href="../../src/style.css" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600&family=IBM+Plex+Mono:wght@400;500&display=swap" />
+    <link rel="stylesheet" href="./style.css" />
   </head>
   <body>
-    <a class="back" href="../../">← All projects</a>
-    <div class="hint">Drag to orbit · scroll to zoom · tweak in the panel</div>
+    <a class="home chip" href="../../">← Home</a>
+
+    <nav class="tabs chip" aria-label="Scene settings">
+      <button type="button" data-panel="views" aria-expanded="false">Views</button>
+      <button type="button" data-panel="water" aria-expanded="false">Water &amp; Light</button>
+      <button type="button" data-panel="camera" aria-expanded="false">Camera</button>
+    </nav>
+
+    <section class="panel" id="panel-views" hidden>
+      <h2>Views</h2>
+      <div class="views" id="view-buttons"></div>
+      <label class="row toggle"><span>Boat under way</span><input type="checkbox" id="cruise" checked /></label>
+    </section>
+
+    <section class="panel" id="panel-water" hidden>
+      <h2>Water &amp; Light</h2>
+      <div id="water-controls"></div>
+      <button type="button" class="wide" id="new-sky">New sky</button>
+    </section>
+
+    <section class="panel" id="panel-camera" hidden>
+      <h2>Camera</h2>
+      <div id="camera-controls"></div>
+    </section>
+
     <script type="module" src="./main.js"></script>
   </body>
 </html>
