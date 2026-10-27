@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>three.js projects</title>
+    <link rel="stylesheet" href="./src/style.css" />
+    <style>
+      main { max-width: 760px; margin: 0 auto; padding: 48px 16px; }
+      h1 { margin: 0 0 8px; }
+      p { opacity: 0.75; margin: 0 0 32px; }
+      ul { list-style: none; padding: 0; display: grid; gap: 12px; }
+      a.card { display: block; padding: 16px 18px; border-radius: 10px; background: #151a24; color: inherit; text-decoration: none; border: 1px solid #252c3a; }
+      a.card:hover { border-color: #4f8cff; }
+      a.card strong { display: block; margin-bottom: 4px; }
+      a.card span { opacity: 0.7; font-size: 14px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>three.js projects</h1>
+      <p>Small experiments. Each one is a folder in <code>projects/</code>.</p>
+      <ul>
+        <li><a class="card" href="./projects/basics/"><strong>Basics</strong><span>Meshes, materials, lights and shadows</span></a></li>
+        <li><a class="card" href="./projects/galaxy/"><strong>Galaxy</strong><span>A spiral galaxy of 60,000 particles</span></a></li>
+        <li><a class="card" href="./projects/terrain/"><strong>Terrain</strong><span>Procedural landscape with water and fog</span></a></li>
+      </ul>
+    </main>
+  </body>
+</html>
