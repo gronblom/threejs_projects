@@ -3,6 +3,8 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { Water } from "three/addons/objects/Water.js";
+import { HDRLoader } from "three/addons/loaders/HDRLoader.js";
+import { EXRLoader } from "three/addons/loaders/EXRLoader.js";
 import { StormSky } from "./sky.js";
 import { createBoat } from "./boat.js";
 
@@ -38,6 +40,8 @@ const settings = {
   orbitSpeed: 0.4,
   cruise: true,
   seed: 3,
+  skyRotation: 0,
+  skyBrightness: 1,
 };
 
 // --- Sky -------------------------------------------------------------------------
@@ -54,17 +58,62 @@ function moonDirection() {
   return new THREE.Vector3().setFromSphericalCoords(1, phi, theta);
 }
 
+// When a sky image is loaded it replaces the generated clouds.
+let skyImage = null;
+const pmrem = new THREE.PMREMGenerator(renderer);
+let imageEnv = null;
+
 function renderSky() {
   const dir = moonDirection();
+  water.material.uniforms.sunDirection.value.copy(dir);
+  moonLight.position.copy(dir).multiplyScalar(100);
+  scene.fog.density = 0.0035 * settings.mist;
+  if (skyImage) return;
   sky.uniforms.uCoverage.value = settings.coverage;
   sky.uniforms.uMoonDir.value.copy(dir);
   sky.uniforms.uMist.value = settings.mist;
   sky.uniforms.uSeed.value = settings.seed;
+  scene.background = sky.texture;
   scene.environment = sky.update();
   scene.environmentIntensity = 0.9;
-  water.material.uniforms.sunDirection.value.copy(dir);
-  moonLight.position.copy(dir).multiplyScalar(100);
-  scene.fog.density = 0.0035 * settings.mist;
+}
+
+/**
+ * Uses a 360° equirectangular image (.hdr, .exr, .jpg, .png, .webp) as the sky,
+ * the water's reflection and the boat's lighting.
+ */
+async function loadSkyImage(url, name = url) {
+  const ext = name.split(".").pop().toLowerCase().split("?")[0];
+  const loader = ext === "hdr" ? new HDRLoader() : ext === "exr" ? new EXRLoader() : new THREE.TextureLoader();
+  const texture = await loader.loadAsync(url);
+  texture.mapping = THREE.EquirectangularReflectionMapping;
+  if (loader instanceof THREE.TextureLoader) texture.colorSpace = THREE.SRGBColorSpace;
+  skyImage?.dispose();
+  imageEnv?.dispose();
+  skyImage = texture;
+  imageEnv = pmrem.fromEquirectangular(texture);
+  scene.background = texture;
+  scene.environment = imageEnv.texture;
+  applySkyTransform();
+  document.getElementById("sky-source").textContent = name.split("/").pop();
+  document.getElementById("generated-sky").hidden = false;
+}
+
+function useGeneratedSky() {
+  skyImage?.dispose();
+  imageEnv?.dispose();
+  skyImage = imageEnv = null;
+  document.getElementById("sky-source").textContent = "Generated clouds";
+  document.getElementById("generated-sky").hidden = true;
+  applySkyTransform();
+  renderSky();
+}
+
+function applySkyTransform() {
+  const r = THREE.MathUtils.degToRad(settings.skyRotation);
+  scene.backgroundRotation.set(0, r, 0);
+  scene.environmentRotation.set(0, r, 0);
+  scene.backgroundIntensity = settings.skyBrightness;
 }
 
 // --- Water -----------------------------------------------------------------------
@@ -292,7 +341,35 @@ toggle(waterControls, {
 });
 document.getElementById("new-sky").addEventListener("click", () => {
   settings.seed = Math.round(Math.random() * 1000) / 10;
-  renderSky();
+  if (skyImage) useGeneratedSky();
+  else renderSky();
+});
+
+const skyControls = document.getElementById("sky-controls");
+slider(skyControls, { key: "skyRotation", label: "Sky rotation", min: -180, max: 180, step: 1, format: deg, onInput: applySkyTransform });
+slider(skyControls, { key: "skyBrightness", label: "Sky brightness", min: 0.2, max: 2, step: 0.01, format: (v) => v.toFixed(2), onInput: applySkyTransform });
+
+const skyFile = document.getElementById("sky-file");
+async function openSkyFile(file) {
+  const url = URL.createObjectURL(file);
+  try {
+    await loadSkyImage(url, file.name);
+  } catch (err) {
+    document.getElementById("sky-source").textContent = `Couldn't read ${file.name}. Use a 360° .hdr, .exr, .jpg or .png.`;
+    console.error(err);
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+skyFile.addEventListener("change", () => skyFile.files[0] && openSkyFile(skyFile.files[0]));
+document.getElementById("load-sky").addEventListener("click", () => skyFile.click());
+document.getElementById("generated-sky").addEventListener("click", useGeneratedSky);
+// Dropping an image anywhere on the page also loads it.
+window.addEventListener("dragover", (e) => e.preventDefault());
+window.addEventListener("drop", (e) => {
+  e.preventDefault();
+  const file = e.dataTransfer?.files?.[0];
+  if (file) openSkyFile(file);
 });
 
 const cameraControls = document.getElementById("camera-controls");
@@ -326,8 +403,12 @@ controls.target.copy(boatPos).add(new THREE.Vector3(0, 1.4, 0));
 document.querySelector('#view-buttons button[data-view="Horizon"]').setAttribute("aria-pressed", "true");
 renderSky();
 
+// A sky image placed next to this file (sky.hdr, sky.exr, sky.jpg, ...) is used automatically.
+const bundledSky = Object.entries(import.meta.glob("./sky.{hdr,exr,jpg,jpeg,png,webp}", { query: "?url", import: "default", eager: true }));
+if (bundledSky.length) loadSkyImage(bundledSky[0][1], bundledSky[0][0]);
+
 // Handle for poking at the scene from the console: open with ?debug.
-if (new URLSearchParams(location.search).has("debug")) window.debug = { THREE, scene, camera, controls, sky, settings, renderSky, renderer };
+if (new URLSearchParams(location.search).has("debug")) window.debug = { THREE, scene, camera, controls, sky, settings, renderSky, renderer, loadSkyImage };
 
 const timer = new THREE.Timer();
 renderer.setAnimationLoop((timestamp) => {

@@ -26,8 +26,19 @@
 
     <section class="panel" id="panel-water" hidden>
       <h2>Water &amp; Light</h2>
+      <div class="sky-source">
+        <span class="eyebrow">Sky</span>
+        <span id="sky-source">Generated clouds</span>
+      </div>
+      <div class="sky-buttons">
+        <button type="button" class="wide" id="load-sky">Load sky image…</button>
+        <button type="button" class="wide" id="new-sky">New generated sky</button>
+        <button type="button" class="wide" id="generated-sky" hidden>Back to generated sky</button>
+      </div>
+      <input type="file" id="sky-file" accept=".hdr,.exr,.jpg,.jpeg,.png,.webp" hidden />
+      <p class="note">Any 360° panorama works (2:1 image). Drop one anywhere on the page.</p>
+      <div id="sky-controls"></div>
       <div id="water-controls"></div>
-      <button type="button" class="wide" id="new-sky">New sky</button>
     </section>
 
     <section class="panel" id="panel-camera" hidden>
