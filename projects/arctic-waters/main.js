@@ -93,7 +93,8 @@ function renderSky() {
 async function loadSkyImage(url, name = url) {
   const ext = name.split(".").pop().toLowerCase().split("?")[0];
   const loader = ext === "hdr" ? new HDRLoader() : ext === "exr" ? new EXRLoader() : new THREE.TextureLoader();
-  if (loader.setDataType) loader.setDataType(THREE.FloatType); // so the pixels can be analysed
+  // Half floats filter smoothly on every GPU (full floats don't always).
+  if (loader.setDataType) loader.setDataType(THREE.HalfFloatType);
   const texture = await loader.loadAsync(url);
   // "sky@5x.jpg": an 8-bit image stored 5x darker so bright clouds don't clip.
   skyGain = Number(name.match(/@([\d.]+)x\./)?.[1] ?? 1);
@@ -104,12 +105,33 @@ async function loadSkyImage(url, name = url) {
   imageEnv?.dispose();
   skyImage = texture;
   imageEnv = pmrem.fromEquirectangular(texture);
+  backdrop?.dispose();
+  backdrop = null;
   scene.background = texture;
   scene.environment = imageEnv.texture;
   applySkyTransform();
   document.getElementById("sky-source").textContent = name.split("/").pop();
   document.getElementById("generated-sky").hidden = false;
   document.getElementById("generated-controls").hidden = true;
+}
+
+/**
+ * Shows a separate, sharper image as the visible sky while the HDR keeps doing
+ * the lighting. A 2K HDR is plenty for lighting but looks soft as a backdrop;
+ * an 8K+ JPEG/WebP of the same sky is sharp and still only a few MB.
+ */
+let backdrop = null;
+let backdropGain = 1;
+async function loadBackdrop(url, name = url) {
+  const texture = await new THREE.TextureLoader().loadAsync(url);
+  texture.mapping = THREE.EquirectangularReflectionMapping;
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  backdrop?.dispose();
+  backdrop = texture;
+  backdropGain = Number(name.match(/@([\d.]+)x\./)?.[1] ?? 1);
+  scene.background = texture;
+  applySkyTransform();
 }
 
 /**
@@ -124,7 +146,8 @@ function analyseSky(texture) {
     ({ width: w, height: h } = texture.image);
     const d = texture.image.data;
     const ch = d.length / (w * h);
-    read = (x, y) => [d[(y * w + x) * ch], d[(y * w + x) * ch + 1], d[(y * w + x) * ch + 2]];
+    const f = d instanceof Uint16Array ? THREE.DataUtils.fromHalfFloat : (v) => v;
+    read = (x, y) => [f(d[(y * w + x) * ch]), f(d[(y * w + x) * ch + 1]), f(d[(y * w + x) * ch + 2])];
   } else {
     // 8-bit image: sample a reduced copy through a canvas.
     w = 512;
@@ -176,7 +199,8 @@ function alignToSkyImage() {
 function useGeneratedSky() {
   skyImage?.dispose();
   imageEnv?.dispose();
-  skyImage = imageEnv = skyInfo = null;
+  backdrop?.dispose();
+  skyImage = imageEnv = skyInfo = backdrop = null;
   scene.fog.color.set(0x9aa7b6);
   document.getElementById("generated-controls").hidden = false;
   document.getElementById("sky-source").textContent = "Generated clouds";
@@ -190,7 +214,7 @@ function applySkyTransform() {
   scene.backgroundRotation.set(0, r, 0);
   scene.environmentRotation.set(0, r, 0);
   const gain = skyImage ? skyGain : 1;
-  scene.backgroundIntensity = settings.skyBrightness * gain;
+  scene.backgroundIntensity = settings.skyBrightness * (backdrop ? backdropGain : gain);
   scene.environmentIntensity = skyImage ? settings.skyBrightness * gain * 0.8 : 0.9;
   alignToSkyImage();
 }
@@ -497,12 +521,17 @@ document.querySelector('#view-buttons button[data-view="Horizon"]').setAttribute
 // A sky image placed next to this file (sky.hdr, sky.exr, sky.jpg, sky@5x.jpg, ...)
 // is used automatically; otherwise the clouds are generated.
 const bundledSky = Object.entries(import.meta.glob("./sky{,@*}.{hdr,exr,jpg,jpeg,png,webp}", { query: "?url", import: "default", eager: true }));
+// An optional backdrop.jpg / backdrop.webp (same sky, higher resolution) replaces
+// what you see, while the sky file above still lights the scene.
+const bundledBackdrop = Object.entries(import.meta.glob("./backdrop{,@*}.{jpg,jpeg,png,webp}", { query: "?url", import: "default", eager: true }));
 if (bundledSky.length) {
   scene.background = new THREE.Color(0x8f98a3); // until the image arrives
-  loadSkyImage(bundledSky[0][1], bundledSky[0][0]).catch((err) => {
-    console.error(err);
-    renderSky();
-  });
+  loadSkyImage(bundledSky[0][1], bundledSky[0][0])
+    .then(() => bundledBackdrop.length && loadBackdrop(bundledBackdrop[0][1], bundledBackdrop[0][0]))
+    .catch((err) => {
+      console.error(err);
+      if (!skyImage) renderSky();
+    });
 } else {
   renderSky();
 }
